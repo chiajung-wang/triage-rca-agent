@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+dist/
+*.egg-info/
+
+# Env / secrets
+.env
+.env.*
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+
+# Run outputs
+result.json
+escalation.json
+runs/
+
+# Eval artifacts
+eval/results/
+*.asciinema
+
+# Docker
+.docker/
+
+# IDE
+.idea/
+.vscode/
+
+# macOS
+.DS_Store
+
+# pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# AI
+.claude
+draft.md
