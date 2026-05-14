@@ -26,6 +26,10 @@ Real-time terminal output during a run showing: current active subagent, current
 ### Budget
 Per-run hard limits enforced by Orchestrator: `$0.50` cost cap, `300s` wall-clock cap, `50 tool calls` per subagent / `200 total` per run. Orchestrator checks before each subagent dispatch; aborts with `budget_exceeded` stop condition if exceeded.
 
+### Run State
+Non-terminal initial state of a run:
+- `running`: pipeline is executing; not yet complete
+
 ### Stop Condition
 Named terminal state of a run. Always produces structured output — never silent failure.
 - `completed`: full pipeline ran, Verifier confirmed ≥1 hypothesis

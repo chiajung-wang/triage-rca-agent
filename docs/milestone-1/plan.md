@@ -18,6 +18,8 @@
 | Create | `requirements.txt` | Pinned deps |
 | Create | `src/triage_rca/__init__.py` | Package init (empty) |
 | Create | `src/triage_rca/__main__.py` | `python -m triage_rca` entry |
+| Create | `src/triage_rca/orchestrator.py` | Stub — raises `NotImplementedError` (implemented M2) |
+| Create | `src/triage_rca/eval.py` | Stub — raises `NotImplementedError` (implemented M6) |
 | Create | `src/triage_rca/cli.py` | argparse: `run`, `eval` subcommands |
 | Create | `src/triage_rca/config.py` | Load + validate .env |
 | Create | `src/triage_rca/db.py` | DB init, schema creation, connection factory |
@@ -40,7 +42,10 @@ CREATE TABLE IF NOT EXISTS runs (
     created_at TEXT NOT NULL,
     issue_text TEXT NOT NULL,
     repo_path TEXT NOT NULL,
-    status TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN (
+        'running', 'completed', 'low_confidence', 'no_hypothesis',
+        'budget_exceeded', 'timeout', 'escalated'
+    )),
     cost_usd REAL,
     elapsed_s REAL,
     tool_calls_total INTEGER,
@@ -49,11 +54,20 @@ CREATE TABLE IF NOT EXISTS runs (
 
 CREATE TABLE IF NOT EXISTS triage_results (
     run_id TEXT PRIMARY KEY REFERENCES runs(id),
-    issue_type TEXT NOT NULL,
-    bug_type TEXT,
-    severity TEXT NOT NULL,
+    issue_type TEXT NOT NULL CHECK (issue_type IN (
+        'confirmed_bug', 'feature_request', 'question',
+        'documentation', 'security', 'enhancement'
+    )),
+    bug_type TEXT CHECK (bug_type IN (
+        'logic_error', 'type_error', 'null_handling', 'off_by_one',
+        'regression', 'concurrency', 'api_misuse', 'config_error',
+        'performance', 'import_error'
+    )),
+    severity TEXT NOT NULL CHECK (severity IN ('critical', 'high', 'medium', 'low')),
     component TEXT,
-    recommendation TEXT NOT NULL,
+    recommendation TEXT NOT NULL CHECK (recommendation IN (
+        'investigate_rca', 'needs_repro', 'close_duplicate', 'needs_more_info'
+    )),
     similar_issues TEXT
 );
 
@@ -64,9 +78,12 @@ CREATE TABLE IF NOT EXISTS hypotheses (
     file TEXT NOT NULL,
     start_line INTEGER NOT NULL,
     end_line INTEGER NOT NULL,
-    confidence REAL NOT NULL,
+    confidence REAL NOT NULL CHECK (confidence >= 0.0 AND confidence <= 1.0),
     reasoning TEXT NOT NULL,
-    verified INTEGER NOT NULL DEFAULT 0
+    verified_status TEXT NOT NULL DEFAULT 'pending' CHECK (
+        verified_status IN ('pending', 'confirmed', 'demoted')
+    ),
+    UNIQUE (run_id, rank)
 );
 ```
 
@@ -112,15 +129,16 @@ def test_load_config_missing_key(monkeypatch):
     monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
     monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
     with pytest.raises(ConfigError, match="ANTHROPIC_API_KEY"):
-        load_config()
+        load_config(env_file="/dev/null")
 
 def test_load_config_success(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-test")
     monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-test")
-    config = load_config()
+    config = load_config(env_file="/dev/null")
     assert config.anthropic_api_key == "sk-test"
     assert config.langfuse_public_key == "pk-test"
+    assert config.db_path == "triage_rca.db"
 ```
 
 - [ ] Run test to confirm it fails:
@@ -135,7 +153,7 @@ pytest tests/unit/test_config.py -v
 ```toml
 [build-system]
 requires = ["setuptools>=68"]
-build-backend = "setuptools.backends.legacy:build"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "triage-rca"
@@ -169,6 +187,20 @@ pytest-mock>=3.0.0
 
 - [ ] Create `src/triage_rca/__init__.py` (empty file)
 
+- [ ] Create `src/triage_rca/orchestrator.py`:
+
+```python
+def run_pipeline(issue: str, repo_path: str, interactive: bool = False) -> None:
+    raise NotImplementedError("Orchestrator not implemented until M2")
+```
+
+- [ ] Create `src/triage_rca/eval.py`:
+
+```python
+def run_eval(mode: str) -> None:
+    raise NotImplementedError("Eval harness not implemented until M6")
+```
+
 - [ ] Create `src/triage_rca/exceptions.py`:
 
 ```python
@@ -196,9 +228,11 @@ class Config:
     langfuse_public_key: str
     langfuse_secret_key: str
     langfuse_host: str = "https://cloud.langfuse.com"
+    db_path: str = "triage_rca.db"
 
-def load_config() -> Config:
-    load_dotenv()
+def load_config(env_file: str | None = None) -> Config:
+    # env_file=None uses default .env discovery; pass "/dev/null" in tests
+    load_dotenv(dotenv_path=env_file)
     missing = [k for k in ("ANTHROPIC_API_KEY", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY") if not os.getenv(k)]
     if missing:
         raise ConfigError(f"Missing required env vars: {', '.join(missing)}")
@@ -207,6 +241,7 @@ def load_config() -> Config:
         langfuse_public_key=os.environ["LANGFUSE_PUBLIC_KEY"],
         langfuse_secret_key=os.environ["LANGFUSE_SECRET_KEY"],
         langfuse_host=os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com"),
+        db_path=os.getenv("TRIAGE_RCA_DB", "triage_rca.db"),
     )
 ```
 
@@ -226,7 +261,7 @@ git commit -m "feat(m1): package scaffold, config loading with validation"
 - [ ] Write failing test `tests/unit/test_budget_tracker.py`:
 
 ```python
-import pytest
+import time, pytest
 from triage_rca.budget import BudgetTracker
 from triage_rca.exceptions import BudgetExceeded
 
@@ -257,6 +292,15 @@ def test_total_tool_calls():
     t.check()  # OK at exactly 200
     t.add_tool_call("any")
     with pytest.raises(BudgetExceeded, match="tool_calls"):
+        t.check()
+
+def test_wall_clock_timeout(monkeypatch):
+    start = 1000.0
+    calls = iter([start, start + 301.0])
+    monkeypatch.setattr(time, "monotonic", lambda: next(calls))
+    t = BudgetTracker()
+    t.start()
+    with pytest.raises(BudgetExceeded, match="timeout"):
         t.check()
 
 def test_snapshot():
@@ -364,7 +408,7 @@ def test_get_connection_row_factory(tmp_path):
     init_db(db_path)
     conn = get_connection(db_path)
     conn.execute("INSERT INTO runs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                 ("r1", "2026-01-01", "issue", "/repo", "completed", 0.1, 10.0, 5, None))
+                 ("r1", "2026-01-01", "issue", "/repo", "running", 0.1, 10.0, 5, None))
     conn.commit()
     row = conn.execute("SELECT * FROM runs WHERE id=?", ("r1",)).fetchone()
     assert row["id"] == "r1"
@@ -382,7 +426,10 @@ CREATE TABLE IF NOT EXISTS runs (
     created_at TEXT NOT NULL,
     issue_text TEXT NOT NULL,
     repo_path TEXT NOT NULL,
-    status TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN (
+        'running', 'completed', 'low_confidence', 'no_hypothesis',
+        'budget_exceeded', 'timeout', 'escalated'
+    )),
     cost_usd REAL,
     elapsed_s REAL,
     tool_calls_total INTEGER,
@@ -390,11 +437,20 @@ CREATE TABLE IF NOT EXISTS runs (
 );
 CREATE TABLE IF NOT EXISTS triage_results (
     run_id TEXT PRIMARY KEY REFERENCES runs(id),
-    issue_type TEXT NOT NULL,
-    bug_type TEXT,
-    severity TEXT NOT NULL,
+    issue_type TEXT NOT NULL CHECK (issue_type IN (
+        'confirmed_bug', 'feature_request', 'question',
+        'documentation', 'security', 'enhancement'
+    )),
+    bug_type TEXT CHECK (bug_type IN (
+        'logic_error', 'type_error', 'null_handling', 'off_by_one',
+        'regression', 'concurrency', 'api_misuse', 'config_error',
+        'performance', 'import_error'
+    )),
+    severity TEXT NOT NULL CHECK (severity IN ('critical', 'high', 'medium', 'low')),
     component TEXT,
-    recommendation TEXT NOT NULL,
+    recommendation TEXT NOT NULL CHECK (recommendation IN (
+        'investigate_rca', 'needs_repro', 'close_duplicate', 'needs_more_info'
+    )),
     similar_issues TEXT
 );
 CREATE TABLE IF NOT EXISTS hypotheses (
@@ -404,20 +460,25 @@ CREATE TABLE IF NOT EXISTS hypotheses (
     file TEXT NOT NULL,
     start_line INTEGER NOT NULL,
     end_line INTEGER NOT NULL,
-    confidence REAL NOT NULL,
+    confidence REAL NOT NULL CHECK (confidence >= 0.0 AND confidence <= 1.0),
     reasoning TEXT NOT NULL,
-    verified INTEGER NOT NULL DEFAULT 0
+    verified_status TEXT NOT NULL DEFAULT 'pending' CHECK (
+        verified_status IN ('pending', 'confirmed', 'demoted')
+    ),
+    UNIQUE (run_id, rank)
 );
 """
 
 def init_db(path: str) -> None:
     conn = sqlite3.connect(path)
+    conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(SCHEMA)
     conn.commit()
     conn.close()
 
 def get_connection(path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(path)
+    conn.execute("PRAGMA foreign_keys = ON")
     conn.row_factory = sqlite3.Row
     return conn
 ```
@@ -488,6 +549,7 @@ triage-rca --help
 
 ```bash
 git add src/triage_rca/db.py src/triage_rca/cli.py src/triage_rca/__main__.py
+git add src/triage_rca/orchestrator.py src/triage_rca/eval.py
 git add scripts/setup_db.py tests/unit/test_db.py tests/__init__.py tests/unit/__init__.py
 git commit -m "feat(m1): DB schema, CLI entry point with run/eval subcommands"
 ```
