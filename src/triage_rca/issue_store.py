@@ -23,6 +23,7 @@ class IssueStore:
     def __init__(self, db_path: str) -> None:
         self._db_path = db_path
         self._conn: sqlite3.Connection | None = None
+        self._dimensions: int | None = None
 
     def _get_conn(self) -> sqlite3.Connection:
         if self._conn is None:
@@ -55,6 +56,7 @@ class IssueStore:
             """
         )
         conn.commit()
+        self._dimensions = dimensions
 
     def insert(
         self,
@@ -64,6 +66,10 @@ class IssueStore:
         embedding: list[float],
     ) -> None:
         """Upsert a bug report and its embedding. Idempotent on bug_id."""
+        if self._dimensions is not None and len(embedding) != self._dimensions:
+            raise ValueError(
+                f"embedding has {len(embedding)} dimensions, expected {self._dimensions}"
+            )
         conn = self._get_conn()
         packed = struct.pack(f"{len(embedding)}f", *embedding)
         with conn:
@@ -101,6 +107,7 @@ class IssueStore:
                 bug_id=row["bug_id"],
                 project=row["project"],
                 description=row["description"],
+                # 1/(1+d) maps unbounded L2 distance to (0,1]; identical vectors → 1.0
                 similarity=1.0 / (1.0 + row["distance"]),
             )
             for row in rows

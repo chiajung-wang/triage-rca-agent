@@ -23,10 +23,7 @@ def load_bugsinpy_bugs(path: str) -> list[dict]:
             if "=" in line:
                 k, _, v = line.partition("=")
                 lines[k.strip()] = v.strip()
-        description = (
-            lines.get("bug_description")
-            or lines.get("buggy_commit_id", "")
-        )
+        description = lines.get("bug_description", "")
         if description:
             bugs.append({"bug_id": bug_id, "project": project, "description": description})
         else:
@@ -54,7 +51,7 @@ if __name__ == "__main__":
                 embedding = embed_text(bug["description"], client)
                 store.insert(bug["bug_id"], bug["project"], bug["description"], embedding)
             except Exception as e:
-                print(f"  Warning: skipped {bug['bug_id']}: {e}")
+                print(f"  Warning: skipped {bug['bug_id']}: {e}", file=sys.stderr)
                 continue
             if (i + 1) % 10 == 0:
                 print(f"  {i + 1}/{len(bugs)} embedded")
