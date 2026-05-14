@@ -52,10 +52,12 @@ CREATE TABLE IF NOT EXISTS hypotheses (
 
 def init_db(path: str) -> None:
     conn = sqlite3.connect(path)
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.executescript(SCHEMA)
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.executescript(SCHEMA)
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def get_connection(path: str) -> sqlite3.Connection:

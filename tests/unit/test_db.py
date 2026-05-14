@@ -1,4 +1,5 @@
-import sqlite3, pytest
+import sqlite3
+import pytest
 from triage_rca.db import init_db, get_connection
 
 
@@ -20,4 +21,17 @@ def test_get_connection_row_factory(tmp_path):
     conn.commit()
     row = conn.execute("SELECT * FROM runs WHERE id=?", ("r1",)).fetchone()
     assert row["id"] == "r1"
+    conn.close()
+
+
+def test_foreign_key_enforcement(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    conn = get_connection(db_path)
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO triage_results VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("nonexistent_id", "confirmed_bug", None, "high", None, "investigate_rca", None),
+        )
+        conn.commit()
     conn.close()

@@ -47,11 +47,14 @@ class BudgetTracker:
                 raise BudgetExceeded(f"tool_calls per subagent ({agent})", self._state)
 
     def snapshot(self) -> BudgetState:
-        if self._start_time is not None:
-            self._state.elapsed_s = time.monotonic() - self._start_time
+        elapsed = (
+            time.monotonic() - self._start_time
+            if self._start_time is not None
+            else self._state.elapsed_s
+        )
         return BudgetState(
             cost_usd=self._state.cost_usd,
-            elapsed_s=self._state.elapsed_s,
+            elapsed_s=elapsed,
             tool_calls_total=self._state.tool_calls_total,
             tool_calls_by_subagent=dict(self._state.tool_calls_by_subagent),
         )

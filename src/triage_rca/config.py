@@ -3,14 +3,17 @@ from dataclasses import dataclass
 from dotenv import load_dotenv
 from .exceptions import ConfigError
 
+_DEFAULT_LANGFUSE_HOST = "https://cloud.langfuse.com"
+_DEFAULT_DB_PATH = "triage_rca.db"
+
 
 @dataclass
 class Config:
     anthropic_api_key: str
     langfuse_public_key: str
     langfuse_secret_key: str
-    langfuse_host: str = "https://cloud.langfuse.com"
-    db_path: str = "triage_rca.db"
+    langfuse_host: str = _DEFAULT_LANGFUSE_HOST
+    db_path: str = _DEFAULT_DB_PATH
 
 
 def load_config(env_file: str | None = None) -> Config:
@@ -23,6 +26,6 @@ def load_config(env_file: str | None = None) -> Config:
         anthropic_api_key=os.environ["ANTHROPIC_API_KEY"],
         langfuse_public_key=os.environ["LANGFUSE_PUBLIC_KEY"],
         langfuse_secret_key=os.environ["LANGFUSE_SECRET_KEY"],
-        langfuse_host=os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com"),
-        db_path=os.getenv("TRIAGE_RCA_DB", "triage_rca.db"),
+        langfuse_host=os.getenv("LANGFUSE_HOST", _DEFAULT_LANGFUSE_HOST),
+        db_path=os.getenv("TRIAGE_RCA_DB", _DEFAULT_DB_PATH),
     )
