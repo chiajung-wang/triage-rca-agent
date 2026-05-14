@@ -12,6 +12,7 @@ def test_insert_and_search(tmp_path):
     results = store.search([0.1, 0.2, 0.3, 0.4], k=2)
     assert len(results) == 2
     assert results[0].bug_id == "bug-1"
+    assert results[1].bug_id == "bug-3"
     assert results[0].similarity >= results[1].similarity
 
 def test_count_empty(tmp_path):
@@ -31,3 +32,5 @@ def test_insert_idempotent(tmp_path):
     store.insert("bug-1", "pandas", "first description", [0.1, 0.2, 0.3, 0.4])
     store.insert("bug-1", "pandas", "updated description", [0.1, 0.2, 0.3, 0.4])
     assert store.count() == 1
+    results = store.search([0.1, 0.2, 0.3, 0.4], k=1)
+    assert results[0].description == "updated description"

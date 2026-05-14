@@ -36,6 +36,8 @@ class IssueStore:
 
     def init_vec_table(self, dimensions: int = 1024) -> None:
         """Create the issue_meta and issue_embeddings tables if they do not exist."""
+        if not isinstance(dimensions, int) or dimensions <= 0:
+            raise ValueError(f"dimensions must be a positive integer, got {dimensions!r}")
         conn = self._get_conn()
         conn.execute(
             """
@@ -64,17 +66,17 @@ class IssueStore:
         """Upsert a bug report and its embedding. Idempotent on bug_id."""
         conn = self._get_conn()
         packed = struct.pack(f"{len(embedding)}f", *embedding)
-        conn.execute(
-            "INSERT OR REPLACE INTO issue_meta(bug_id, project, description) VALUES (?, ?, ?)",
-            (bug_id, project, description),
-        )
-        # vec0 virtual tables do not support INSERT OR REPLACE; use DELETE + INSERT for upsert.
-        conn.execute("DELETE FROM issue_embeddings WHERE bug_id = ?", (bug_id,))
-        conn.execute(
-            "INSERT INTO issue_embeddings(bug_id, embedding) VALUES (?, ?)",
-            (bug_id, packed),
-        )
-        conn.commit()
+        with conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO issue_meta(bug_id, project, description) VALUES (?, ?, ?)",
+                (bug_id, project, description),
+            )
+            # vec0 virtual tables do not support INSERT OR REPLACE; use DELETE + INSERT for upsert.
+            conn.execute("DELETE FROM issue_embeddings WHERE bug_id = ?", (bug_id,))
+            conn.execute(
+                "INSERT INTO issue_embeddings(bug_id, embedding) VALUES (?, ?)",
+                (bug_id, packed),
+            )
 
     def search(
         self,
@@ -99,10 +101,21 @@ class IssueStore:
                 bug_id=row["bug_id"],
                 project=row["project"],
                 description=row["description"],
-                similarity=max(0.0, 1.0 - row["distance"]),
+                similarity=1.0 / (1.0 + row["distance"]),
             )
             for row in rows
         ]
+
+    def close(self) -> None:
+        if self._conn is not None:
+            self._conn.close()
+            self._conn = None
+
+    def __enter__(self) -> "IssueStore":
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
 
     def count(self) -> int:
         """Return the number of stored issues."""
