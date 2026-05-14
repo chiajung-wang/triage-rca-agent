@@ -11,6 +11,7 @@ BUGSINPY_PATH = os.getenv("BUGSINPY_PATH", "data/bugsinpy")
 
 def load_bugsinpy_bugs(path: str) -> list[dict]:
     bugs = []
+    skipped = 0
     for bug_info in Path(path).glob("projects/*/bugs/*/bug.info"):
         parts = bug_info.parts
         project = parts[-4]
@@ -28,6 +29,11 @@ def load_bugsinpy_bugs(path: str) -> list[dict]:
         )
         if description:
             bugs.append({"bug_id": bug_id, "project": project, "description": description})
+        else:
+            print(f"  Warning: {bug_id} has no description, skipping", file=sys.stderr)
+            skipped += 1
+    if skipped:
+        print(f"  Note: {skipped} bugs had no description and were skipped", file=sys.stderr)
     return bugs
 
 if __name__ == "__main__":
@@ -37,15 +43,20 @@ if __name__ == "__main__":
         sys.exit(1)
 
     client = anthropic.Anthropic()
-    store = IssueStore(DB_PATH)
 
     bugs = load_bugsinpy_bugs(BUGSINPY_PATH)
     print(f"Found {len(bugs)} bugs. Embedding...")
 
-    for i, bug in enumerate(bugs):
-        embedding = embed_text(bug["description"], client)
-        store.insert(bug["bug_id"], bug["project"], bug["description"], embedding)
-        if (i + 1) % 10 == 0:
-            print(f"  {i + 1}/{len(bugs)} embedded")
+    with IssueStore(DB_PATH) as store:
+        store.init_vec_table(dimensions=1024)
+        for i, bug in enumerate(bugs):
+            try:
+                embedding = embed_text(bug["description"], client)
+                store.insert(bug["bug_id"], bug["project"], bug["description"], embedding)
+            except Exception as e:
+                print(f"  Warning: skipped {bug['bug_id']}: {e}")
+                continue
+            if (i + 1) % 10 == 0:
+                print(f"  {i + 1}/{len(bugs)} embedded")
 
-    print(f"Done. {store.count()} bugs in Issue Store.")
+        print(f"Done. {store.count()} bugs in Issue Store.")
